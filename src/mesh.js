@@ -84,6 +84,8 @@ export class MeshClient {
   /** Lance la poignée de main en deux étapes ; se résout une fois terminée. */
   configure() {
     this.stopHeartbeat();
+    // Une seule poignée de main à la fois : l'ancienne est marquée « remplacée ».
+    this.failHandshake(Object.assign(new Error("poignée de main relancée"), { superseded: true }));
     return new Promise((resolve, reject) => {
       this.handshake = { stage: "config", resolve, reject, timer: null, hasMyInfo: false };
       this.startStage("config");

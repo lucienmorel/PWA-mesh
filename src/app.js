@@ -1,5 +1,5 @@
 // app.js — Interface minimale : relie BleRadio (Bluetooth) et MeshClient (protocole) à la page.
-import { BleRadio } from "./ble.js";
+import { BleRadio, checkBluetoothSupport } from "./ble.js";
 import { MeshClient, BROADCAST, MAX_TEXT_BYTES } from "./mesh.js";
 import { Config } from "@meshtastic/protobufs";
 import QRCode from "qrcode";
@@ -16,22 +16,47 @@ $("connect").onclick = async () => {
   mesh = new MeshClient((bytes) => radio.write(bytes));
   radio = new BleRadio({
     onPacket: (bytes) => mesh.handleFromRadio(bytes),
-    onDisconnect: (reason) => disconnect("Perdu : " + reason),
+    onStatus: onRadioStatus,
   });
   mesh.on("channels", fillChannels).on("nodes", fillNodes).on("message", onMessage);
 
   try {
-    const name = await radio.requestAndConnect(); // sélecteur Bluetooth
+    await radio.requestAndConnect(); // sélecteur Bluetooth
     $("status").textContent = "Configuration…";
-    await mesh.configure(); // poignée de main
-    $("status").textContent = "Connecté à " + name;
-    $("me").textContent = "Moi : " + mesh.nodeName(mesh.myNodeNum);
     $("connect").textContent = "Déconnecter";
-    enable(true);
+    await mesh.configure(); // poignée de main
+    ready();
   } catch (err) {
+    // Liaison tombée pendant la configuration : la reconnexion automatique prend le relais.
+    if (err.superseded || radio?.reconnecting) return;
     disconnect(err.name === "NotFoundError" ? "Déconnecté" : "Erreur : " + err.message);
   }
 };
+
+// Liaison tombée puis rétablie automatiquement par ble.js
+async function onRadioStatus(kind, detail) {
+  if (!mesh) return;
+  if (kind === "reconnecting") {
+    $("status").textContent = "Liaison perdue, reconnexion…";
+    enable(false);
+  } else if (kind === "reconnected") {
+    $("status").textContent = "Reconnecté, configuration…";
+    try {
+      await mesh.configure(); // la radio attend une nouvelle poignée de main
+      ready();
+    } catch (err) {
+      if (!err.superseded) disconnect("Erreur : " + err.message);
+    }
+  } else if (kind === "lost") {
+    disconnect("Perdu : " + detail);
+  }
+}
+
+function ready() {
+  $("status").textContent = "Connecté à " + (radio.device?.name || "la radio");
+  $("me").textContent = "Moi : " + mesh.nodeName(mesh.myNodeNum);
+  enable(true);
+}
 
 function disconnect(label) {
   mesh?.close(label);
@@ -163,3 +188,9 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
 
 render();
 updateCount();
+checkBluetoothSupport().then((problem) => {
+  if (problem) {
+    $("status").textContent = problem;
+    $("connect").disabled = true;
+  }
+});
