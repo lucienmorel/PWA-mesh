@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon-192.png">
+  <title>LoRa Messager</title>
+</head>
+<body>
+  <h1>LoRa Messager</h1>
+
+  <p>
+    <button id="connect">Connecter la radio</button>
+    <span id="status">Déconnecté</span>
+  </p>
+  <p id="me"></p>
+
+  <p>
+    <label>Canal <select id="channel" disabled></select></label>
+    <label>Destinataire
+      <select id="dest" disabled><option value="broadcast">Tous (diffusion)</option></select>
+    </label>
+    <button id="share" disabled>Partager un canal</button>
+  </p>
+
+  <form id="composer">
+    <input id="text" placeholder="Votre message" size="40" disabled>
+    <button id="send" disabled>Envoyer</button>
+    <span id="count">0/228</span>
+  </form>
+
+  <ul id="messages"></ul>
+
+  <dialog id="shareDialog">
+    <form method="dialog">
+      <p><b>Partager un canal</b> — à scanner avec l'appli Meshtastic de l'autre radio (onglet Canaux).</p>
+      <p id="shareChannels"></p>
+      <p>
+        <label><input type="radio" name="mode" value="replace" checked> Remplacer ses canaux</label>
+        <label><input type="radio" name="mode" value="add"> Ajouter à ses canaux</label>
+      </p>
+      <div id="qr"></div>
+      <p id="lora"></p>
+      <p>
+        <button id="copyLink" type="button">Copier le lien</button>
+        <button>Fermer</button>
+      </p>
+      <p><small>Le QR code contient la clé du canal.</small></p>
+    </form>
+  </dialog>
+
+  <script type="module" src="/src/app.js"></script>
+</body>
+</html>

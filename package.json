@@ -1,0 +1,21 @@
+{
+  "name": "lora-messager",
+  "version": "1.0.0",
+  "description": "PWA de messagerie LoRa via une radio Meshtastic en Bluetooth",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview --host"
+  },
+  "license": "GPL-3.0-only",
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.16.0",
+    "@meshtastic/protobufs": "^2.8.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "vite": "^7.3.7"
+  },
+  "private": true,
+  "type": "module"
+}
