@@ -8,7 +8,8 @@ export const TORADIO_UUID = "f75c76d2-129e-4dad-a1dd-7866124401e7"; // écriture
 export const FROMRADIO_UUID = "2c55e69e-4993-11ed-b878-0242ac120002"; // lecture
 export const FROMNUM_UUID = "ed9da18c-a800-4f66-a670-aa7547e34453"; // notification
 
-const CONNECT_ATTEMPTS = 4; // tentatives à la première connexion
+const CONNECT_ATTEMPTS = 6; // tentatives à la première connexion (~20 s)
+const PAIRING_TIMEOUT_MS = 60_000; // temps laissé pour saisir le code PIN
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 15000]; // après une coupure
 const READ_RETRY_MS = 1000; // une lecture qui échoue est retentée…
 const READ_RETRY_MAX = 30; // …pendant 30 s (le temps de taper le PIN d'appairage)
@@ -34,7 +35,7 @@ export async function checkBluetoothSupport() {
 /**
  * Connexion BLE à une radio Meshtastic.
  *   onPacket(Uint8Array)       : un message FromRadio brut reçu
- *   onStatus(état, détail)     : "reconnecting" | "reconnected" | "lost"
+ *   onStatus(état, détail)     : "pairing" | "reconnecting" | "reconnected" | "lost"
  */
 export class BleRadio {
   constructor({ onPacket, onStatus }) {
@@ -73,19 +74,19 @@ export class BleRadio {
     let lastErr;
     for (let i = 1; i <= attempts; i++) {
       try {
-        await this.connectOnce();
+        await this.connectOnce({ lastAttempt: i === attempts });
         return;
       } catch (err) {
         lastErr = err;
         if (err.fatal || this.userClosing) break;
-        await sleep(750 * i);
+        await sleep(Math.min(1000 * i, 4000));
       }
     }
     throw new Error(lastErr?.fatal ? lastErr.message : explain(lastErr));
   }
 
-  /** Une tentative : GATT, service, 3 caractéristiques, notifications. */
-  async connectOnce() {
+  /** Une tentative : GATT, service, 3 caractéristiques, appairage, notifications. */
+  async connectOnce({ lastAttempt = true } = {}) {
     this.ready = false;
     const gen = ++this.generation;
     if (!this.device.gatt) throw fatal("La radio n'expose pas de serveur GATT. Réappairez-la.");
@@ -95,8 +96,9 @@ export class BleRadio {
     try {
       service = await server.getPrimaryService(SERVICE_UUID);
     } catch (err) {
-      // Introuvable alors que la liaison tient : la radio n'a vraiment pas le service.
-      if (err?.name === "NotFoundError" && this.device.gatt.connected) {
+      // Sur Android, tant que l'appairage n'est pas fini, la découverte peut
+      // revenir vide alors que la liaison tient : on ne conclut qu'au dernier essai.
+      if (err?.name === "NotFoundError" && this.device.gatt.connected && lastAttempt) {
         throw fatal("Service Meshtastic introuvable : firmware trop ancien ou radio dans un autre mode.");
       }
       throw err; // liaison coupée pendant la découverte : on retentera
@@ -105,12 +107,49 @@ export class BleRadio {
     this.fromRadio = await service.getCharacteristic(FROMRADIO_UUID);
     this.fromNum = await service.getCharacteristic(FROMNUM_UUID);
 
-    await this.fromNum.startNotifications();
+    await this.waitUntilPaired(gen);
     this.fromNum.addEventListener("characteristicvaluechanged", this.handleFromNum);
     if (gen !== this.generation) throw new Error("connexion remplacée");
     this.gattChain = Promise.resolve();
     this.ready = true;
     this.readAll(); // des données attendent peut-être déjà
+  }
+
+  /**
+   * Les caractéristiques Meshtastic sont chiffrées : la première lecture
+   * déclenche l'appairage (code PIN) côté système. Tant qu'il n'est pas
+   * terminé, lectures et notifications échouent. On attend ici, avant toute
+   * poignée de main, au lieu de laisser la configuration expirer.
+   */
+  async waitUntilPaired(gen) {
+    const deadline = Date.now() + PAIRING_TIMEOUT_MS;
+    let announced = false;
+    while (true) {
+      try {
+        const v = await this.fromRadio.readValue();
+        if (v.byteLength) this.onPacket(new Uint8Array(v.buffer, v.byteOffset, v.byteLength).slice());
+        await this.fromNum.startNotifications();
+        return;
+      } catch (err) {
+        if (!this.device.gatt.connected || gen !== this.generation) throw err; // liaison coupée : nouvel essai
+        if (Date.now() > deadline) throw fatal("Appairage non terminé : le code PIN a-t-il été saisi ?");
+        if (!announced) {
+          announced = true;
+          this.onStatus?.("pairing");
+        }
+        await sleep(1000);
+      }
+    }
+  }
+
+  /** Repart de zéro (nouvelle liaison + nouvelle session radio). */
+  restart() {
+    this.ready = false;
+    this.generation++;
+    try {
+      if (this.device?.gatt?.connected) this.device.gatt.disconnect();
+    } catch {}
+    void this.reconnectLoop();
   }
 
   /** Sérialise les opérations GATT (lecture/écriture) dans une file. */
@@ -186,11 +225,11 @@ export class BleRadio {
     this.reconnecting = true;
     this.onStatus?.("reconnecting");
     try {
-      for (const delay of RECONNECT_DELAYS_MS) {
+      for (const [i, delay] of RECONNECT_DELAYS_MS.entries()) {
         await sleep(delay);
         if (this.userClosing) return;
         try {
-          await this.connectOnce();
+          await this.connectOnce({ lastAttempt: i === RECONNECT_DELAYS_MS.length - 1 });
           this.onStatus?.("reconnected");
           return;
         } catch (err) {

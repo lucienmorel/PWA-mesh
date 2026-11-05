@@ -21,32 +21,46 @@ $("connect").onclick = async () => {
   mesh.on("channels", fillChannels).on("nodes", fillNodes).on("message", onMessage);
 
   try {
-    await radio.requestAndConnect(); // sélecteur Bluetooth
-    $("status").textContent = "Configuration…";
     $("connect").textContent = "Déconnecter";
-    await mesh.configure(); // poignée de main
-    ready();
+    await radio.requestAndConnect(); // sélecteur Bluetooth + appairage
   } catch (err) {
-    // Liaison tombée pendant la configuration : la reconnexion automatique prend le relais.
-    if (err.superseded || radio?.reconnecting) return;
-    disconnect(err.name === "NotFoundError" ? "Déconnecté" : "Erreur : " + err.message);
+    return disconnect(err.name === "NotFoundError" ? "Déconnecté" : "Erreur : " + err.message);
   }
+  handshake();
 };
 
+// Poignée de main avec la radio. Si elle ne répond pas, on repart d'une
+// liaison neuve (2 fois) plutôt que de renvoyer wantConfigId dans la même
+// session, ce qui peut bloquer le firmware (cf. handshake.ts du dépôt).
+let handshakeRetries = 0;
+async function handshake() {
+  $("status").textContent = "Configuration…";
+  try {
+    await mesh.configure();
+    handshakeRetries = 0;
+    ready();
+  } catch (err) {
+    if (err.superseded || !mesh || radio?.reconnecting) return; // une reconnexion est déjà en cours
+    if (handshakeRetries++ < 2) {
+      $("status").textContent = "La radio ne répond pas, nouvel essai…";
+      radio.restart();
+    } else {
+      handshakeRetries = 0;
+      disconnect("Erreur : " + err.message + ". Rapprochez la radio, puis reconnectez-la.");
+    }
+  }
+}
+
 // Liaison tombée puis rétablie automatiquement par ble.js
-async function onRadioStatus(kind, detail) {
+function onRadioStatus(kind, detail) {
   if (!mesh) return;
-  if (kind === "reconnecting") {
-    $("status").textContent = "Liaison perdue, reconnexion…";
+  if (kind === "pairing") {
+    $("status").textContent = "Appairage : saisissez le code PIN de la radio (affiché sur son écran, ou 123456).";
+  } else if (kind === "reconnecting") {
+    if (!$("status").textContent.includes("nouvel essai")) $("status").textContent = "Liaison perdue, reconnexion…";
     enable(false);
   } else if (kind === "reconnected") {
-    $("status").textContent = "Reconnecté, configuration…";
-    try {
-      await mesh.configure(); // la radio attend une nouvelle poignée de main
-      ready();
-    } catch (err) {
-      if (!err.superseded) disconnect("Erreur : " + err.message);
-    }
+    handshake(); // la radio attend une nouvelle poignée de main
   } else if (kind === "lost") {
     disconnect("Perdu : " + detail);
   }
